@@ -1,0 +1,7 @@
+# Request: no fields, caller asks for the latest detected point.
+---
+# Response
+bool success
+string message
+string source
+geometry_msgs/PointStamped point

@@ -21,6 +21,7 @@ This repository is prepared for GitHub publication with Docker packaging, runtim
 
 - ROS image publishing on `/camera/image_raw`.
 - Point publishing on `/camera/object_point`.
+- Latest detected point query via ROS service `/camera/get_object_point` (`opencv_ros2_bridge_interfaces/srv/GetObjectPoint`).
 - Windows preview sender with:
   - left-click point publish
   - optional black-object detection
@@ -90,6 +91,21 @@ WSL terminal B:
 source /opt/ros/jazzy/setup.bash
 ros2 topic echo /camera/object_point
 ```
+
+To pull the latest detected point on demand instead of subscribing to the topic, build the interface package once:
+
+```bash
+colcon build --packages-select opencv_ros2_bridge_interfaces
+source install/setup.bash
+```
+
+Then call the service:
+
+```bash
+ros2 service call /camera/get_object_point opencv_ros2_bridge_interfaces/srv/GetObjectPoint
+```
+
+The response carries `success`, `message`, `source` (e.g. `click` or `black_detect`), and a `geometry_msgs/PointStamped`.
 
 ## Quick Start (Docker Runtime)
 

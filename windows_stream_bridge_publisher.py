@@ -13,6 +13,8 @@ import socket
 import struct
 import time
 
+import threading
+
 import cv2
 import numpy as np
 import rclpy
@@ -23,6 +25,11 @@ from ros_image_codec import cv_frame_to_image_msg
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
+try:
+    from opencv_ros2_bridge_interfaces.srv import GetObjectPoint
+except ImportError:
+    GetObjectPoint = None
+
 
 class WindowsStreamBridgePublisher(Node):
     def __init__(self) -> None:
@@ -32,6 +39,7 @@ class WindowsStreamBridgePublisher(Node):
         self.declare_parameter("listen_port", 5001)
         self.declare_parameter("publish_topic", "/camera/image_raw")
         self.declare_parameter("point_topic", "/camera/object_point")
+        self.declare_parameter("point_service", "/camera/get_object_point")
         self.declare_parameter("frame_id", "camera_frame")
         self.declare_parameter("bridge_control_topic", "/camera/bridge_control")
         self.declare_parameter("enable_publish_fps_log", True)
@@ -44,6 +52,9 @@ class WindowsStreamBridgePublisher(Node):
         self.listen_port = self.get_parameter("listen_port").get_parameter_value().integer_value
         self.publish_topic = self.get_parameter("publish_topic").get_parameter_value().string_value
         self.point_topic = self.get_parameter("point_topic").get_parameter_value().string_value
+        self.point_service_name = (
+            self.get_parameter("point_service").get_parameter_value().string_value
+        )
         self.frame_id = self.get_parameter("frame_id").get_parameter_value().string_value
         self.bridge_control_topic = (
             self.get_parameter("bridge_control_topic").get_parameter_value().string_value
@@ -81,6 +92,23 @@ class WindowsStreamBridgePublisher(Node):
             10,
         )
 
+        self._latest_point_lock = threading.Lock()
+        self._latest_point: PointStamped | None = None
+        self._latest_point_source: str = ""
+
+        if GetObjectPoint is None:
+            self.point_service = None
+            self.get_logger().warning(
+                "opencv_ros2_bridge_interfaces.srv.GetObjectPoint not found. "
+                "Build the interface package and source install/setup.bash to enable the service."
+            )
+        else:
+            self.point_service = self.create_service(
+                GetObjectPoint,
+                self.point_service_name,
+                self._handle_get_object_point,
+            )
+
         self.total_frames = 0
         self.window_frames = 0
         self.window_started = time.monotonic()
@@ -91,6 +119,8 @@ class WindowsStreamBridgePublisher(Node):
             f"  listen: {self.listen_host}:{self.listen_port}\n"
             f"  publish: {self.publish_topic}\n"
             f"  point: {self.point_topic}\n"
+            f"  point_service: {self.point_service_name}"
+            f"{' (disabled, interfaces not built)' if self.point_service is None else ''}\n"
             f"  frame_id: {self.frame_id}\n"
             f"  control: {self.bridge_control_topic}\n"
             f"  publish_fps_log: {self.enable_publish_fps_log}"
@@ -189,6 +219,10 @@ class WindowsStreamBridgePublisher(Node):
         point_msg.point.z = float(self.default_z_m)
         self.point_publisher.publish(point_msg)
 
+        with self._latest_point_lock:
+            self._latest_point = point_msg
+            self._latest_point_source = source
+
         now = time.monotonic()
         if now - self.last_point_log_time >= 0.5:
             self.last_point_log_time = now
@@ -196,6 +230,25 @@ class WindowsStreamBridgePublisher(Node):
                 f"Published {source} point px=({x_px},{y_px}) -> "
                 f"(X y z) ({x_m:.1f} {y_m:.1f} {self.default_z_m:.1f}) on {self.point_topic}"
             )
+
+    def _handle_get_object_point(self, request, response):  # noqa: ANN001
+        with self._latest_point_lock:
+            cached = self._latest_point
+            source = self._latest_point_source
+
+        if cached is None:
+            response.success = False
+            response.message = "no point detected yet"
+            response.source = ""
+            response.point = PointStamped()
+            response.point.header.frame_id = self.frame_id
+            return response
+
+        response.success = True
+        response.message = "ok"
+        response.source = source
+        response.point = cached
+        return response
 
     def _handle_control_payload(self, payload: bytes) -> None:
         try:
@@ -307,14 +360,18 @@ def main(args: list[str] | None = None) -> None:
     rclpy.init(args=args)
     node = WindowsStreamBridgePublisher()
 
+    spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
+    spin_thread.start()
+
     try:
         node.serve()
     except KeyboardInterrupt:
         node.get_logger().info("Shutdown requested by keyboard interrupt.")
     finally:
-        node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
+        spin_thread.join(timeout=1.0)
+        node.destroy_node()
 
 
 if __name__ == "__main__":
