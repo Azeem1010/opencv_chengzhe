@@ -1,7 +1,11 @@
-# Request: no fields, caller asks for the latest detected point.
+# Request: no fields, caller asks for the latest pick-and-place pair.
 ---
 # Response
+# success: 是否成功找出一組「橘色圓 -> 空黑方塊」配對
+# message: 失敗或成功原因的文字說明
+# current_position: 要夾取的橘色圓形中心 (影像座標系下的 2D 點, z 固定為 0)
+# target_position : 要放置的空黑色方塊中心 (影像座標系下的 2D 點, z 固定為 0)
 bool success
 string message
-string source
-geometry_msgs/PointStamped point
+geometry_msgs/Point current_position
+geometry_msgs/Point target_position
